@@ -22,11 +22,12 @@
 #include "CCPhysicsDebugNode.h"
 
 #if CC_ENABLE_CHIPMUNK_INTEGRATION
-#include "chipmunk_private.h"
+#include "chipmunk.h"
 #endif
 
 #include "base/ccTypes.h"
 #include "math/CCGeometry.h"
+
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -48,18 +49,18 @@ NS_CC_EXT_BEGIN
 
 static Color4F ColorForBody(cpBody *body)
 {
-    if (CP_BODY_TYPE_STATIC == cpBodyGetType(body)  || cpBodyIsSleeping(body))
+	if (cpBodyIsRogue(body) || cpBodyIsSleeping(body))
     {
-        return Color4F(0.5f, 0.5f, 0.5f ,0.5f);
-    }
-    else if (body->sleeping.idleTime > cpBodyGetSpace(body)->sleepTimeThreshold)
+		return Color4F(0.5f, 0.5f, 0.5f ,0.5f);
+	}
+    else if (body->CP_PRIVATE(node).idleTime > body->CP_PRIVATE(space)->sleepTimeThreshold)
     {
-        return Color4F(0.33f, 0.33f, 0.33f, 0.5f);
-    }
+		return Color4F(0.33f, 0.33f, 0.33f, 0.5f);
+	}
     else
     {
-        return Color4F(1.0f, 0.0f, 0.0f, 0.5f);
-    }
+		return Color4F(1.0f, 0.0f, 0.0f, 0.5f);
+	}
 }
 
 static Vec2 cpVert2Point(const cpVect &vert)
@@ -67,22 +68,22 @@ static Vec2 cpVert2Point(const cpVect &vert)
     return Vec2(vert.x, vert.y);
 }
 
-static Vec2* cpVertArray2ccpArrayN(const cpSplittingPlane* cpVertArray, unsigned int count)
+static Vec2* cpVertArray2ccpArrayN(const cpVect* cpVertArray, unsigned int count)
 {
     if (count == 0) return nullptr;
     Vec2* pPoints = new (std::nothrow) Vec2[count];
     
     for (unsigned int i = 0; i < count; ++i)
     {
-        pPoints[i].x = cpVertArray[i].v0.x;
-        pPoints[i].y = cpVertArray[i].v0.y;
+        pPoints[i].x = cpVertArray[i].x;
+        pPoints[i].y = cpVertArray[i].y;
     }
     return pPoints;
 }
 
 static void DrawShape(cpShape *shape, DrawNode *renderer)
 {
-	cpBody *body = cpShapeGetBody(shape);
+	cpBody *body = shape->body;
 	Color4F color = ColorForBody(body);
     
 	switch (shape->CP_PRIVATE(klass)->type)
@@ -93,7 +94,7 @@ static void DrawShape(cpShape *shape, DrawNode *renderer)
             cpVect center = circle->tc;
             cpFloat radius = circle->r;
             renderer->drawDot(cpVert2Point(center), cpfmax(radius, 1.0), color);
-            renderer->drawSegment(cpVert2Point(center), cpVert2Point(cpvadd(center, cpvmult(cpBodyGetRotation(body), radius))), 1.0, color);
+            renderer->drawSegment(cpVert2Point(center), cpVert2Point(cpvadd(center, cpvmult(body->rot, radius))), 1.0, color);
         }
              break;
 		case CP_SEGMENT_SHAPE:
@@ -104,14 +105,11 @@ static void DrawShape(cpShape *shape, DrawNode *renderer)
             break;
 		case CP_POLY_SHAPE:
         {
-            cpPolyShape* poly = (cpPolyShape*)shape;
+            cpPolyShape *poly = (cpPolyShape *)shape;
             Color4F line = color;
             line.a = cpflerp(color.a, 1.0, 0.5);
-            int num = poly->count;
-            Vec2* pPoints = new (std::nothrow) Vec2[num];
-            for(int i=0;i<num;++i)
-                pPoints[i] = cpVert2Point(poly->planes[i].v0);
-            renderer->drawPolygon(pPoints, num, color, 1.0, line);
+            Vec2* pPoints = cpVertArray2ccpArrayN(poly->tVerts, poly->numVerts);
+            renderer->drawPolygon(pPoints, poly->numVerts, color, 1.0, line);
             CC_SAFE_DELETE_ARRAY(pPoints);
         }
             break;
@@ -124,45 +122,54 @@ static Color4F CONSTRAINT_COLOR(0, 1, 0, 0.5);
 
 static void DrawConstraint(cpConstraint *constraint, DrawNode *renderer)
 {
-	cpBody *body_a = cpConstraintGetBodyA(constraint);
-	cpBody *body_b = cpConstraintGetBodyB(constraint);
+	cpBody *body_a = constraint->a;
+	cpBody *body_b = constraint->b;
     
-	if (cpConstraintIsPinJoint(constraint))
+	const cpConstraintClass *klass = constraint->CP_PRIVATE(klass);
+	if (klass == cpPinJointGetClass())
     {
-		cpVect a = cpvadd(body_a->p, cpvrotate(cpPinJointGetAnchorA(constraint), cpBodyGetRotation(body_a)));
-		cpVect b = cpvadd(body_b->p, cpvrotate(cpPinJointGetAnchorB(constraint), cpBodyGetRotation(body_b)));
+		cpPinJoint *joint = (cpPinJoint *)constraint;
+		
+		cpVect a = cpBodyLocal2World(body_a, joint->anchr1);
+		cpVect b = cpBodyLocal2World(body_b, joint->anchr2);
 		
         renderer->drawDot(cpVert2Point(a), 3.0, CONSTRAINT_COLOR);
         renderer->drawDot(cpVert2Point(b), 3.0, CONSTRAINT_COLOR);
         renderer->drawSegment(cpVert2Point(a), cpVert2Point(b), 1.0, CONSTRAINT_COLOR);
 	}
-    else if (cpConstraintIsSlideJoint(constraint))
+    else if (klass == cpSlideJointGetClass())
     {
-		cpVect a = cpvadd(body_a->p, cpvrotate(cpSlideJointGetAnchorA(constraint), cpBodyGetRotation(body_a)));
-		cpVect b = cpvadd(body_b->p, cpvrotate(cpSlideJointGetAnchorB(constraint), cpBodyGetRotation(body_b)));
+		cpSlideJoint *joint = (cpSlideJoint *)constraint;
+        
+		cpVect a = cpBodyLocal2World(body_a, joint->anchr1);
+		cpVect b = cpBodyLocal2World(body_b, joint->anchr2);
         
         renderer->drawDot(cpVert2Point(a), 3.0, CONSTRAINT_COLOR);
         renderer->drawDot(cpVert2Point(b), 3.0, CONSTRAINT_COLOR);
         renderer->drawSegment(cpVert2Point(a), cpVert2Point(b), 1.0, CONSTRAINT_COLOR);
 	}
-    else if (cpConstraintIsPivotJoint(constraint))
+    else if (klass == cpPivotJointGetClass())
     {
-        cpVect a = cpvadd(body_a->p, cpvrotate(cpPivotJointGetAnchorA(constraint), cpBodyGetRotation(body_a)));
-        cpVect b = cpvadd(body_b->p, cpvrotate(cpPivotJointGetAnchorB(constraint), cpBodyGetRotation(body_b)));
+		cpPivotJoint *joint = (cpPivotJoint *)constraint;
+        
+		cpVect a = cpBodyLocal2World(body_a, joint->anchr1);
+		cpVect b = cpBodyLocal2World(body_b, joint->anchr2);
         
         renderer->drawDot(cpVert2Point(a), 3.0, CONSTRAINT_COLOR);
         renderer->drawDot(cpVert2Point(b), 3.0, CONSTRAINT_COLOR);
 	}
-    else if (cpConstraintIsGrooveJoint(constraint))
+    else if (klass == cpGrooveJointGetClass())
     {
-        cpVect a = cpvadd(body_a->p, cpvrotate(cpGrooveJointGetGrooveA(constraint), cpBodyGetRotation(body_a)));
-        cpVect b = cpvadd(body_a->p, cpvrotate(cpGrooveJointGetGrooveB(constraint), cpBodyGetRotation(body_a)));
-        cpVect c = cpvadd(body_b->p, cpvrotate(cpGrooveJointGetAnchorB(constraint), cpBodyGetRotation(body_b)));
+		cpGrooveJoint *joint = (cpGrooveJoint *)constraint;
+        
+		cpVect a = cpBodyLocal2World(body_a, joint->grv_a);
+		cpVect b = cpBodyLocal2World(body_a, joint->grv_b);
+		cpVect c = cpBodyLocal2World(body_b, joint->anchr2);
         
         renderer->drawDot(cpVert2Point(c), 3.0, CONSTRAINT_COLOR);
         renderer->drawSegment(cpVert2Point(a), cpVert2Point(b), 1.0, CONSTRAINT_COLOR);
 	}
-    else if (cpConstraintIsDampedSpring(constraint))
+    else if (klass == cpDampedSpringGetClass())
     {
 		// TODO: uninplemented
 	}
