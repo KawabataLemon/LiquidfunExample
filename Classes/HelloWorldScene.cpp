@@ -1,5 +1,4 @@
 #include "HelloWorldScene.h"
-#include "Box2D/Box2D.h"
 
 USING_NS_CC;
 
@@ -21,67 +20,159 @@ Scene* HelloWorld::createScene()
 // on "init" you need to initialize your instance
 bool HelloWorld::init()
 {
-    //////////////////////////////
-    // 1. super init first
-    if ( !Layer::init() )
-    {
-        return false;
-    }
+    // 初期化に失敗したら
+    if(!Layer::init()) return false;
     
-    Size visibleSize = Director::getInstance()->getVisibleSize();
-    Vec2 origin = Director::getInstance()->getVisibleOrigin();
+    // タッチイベントを登録
+    EventListenerTouchOneByOne* listener { EventListenerTouchOneByOne::create() };
+    listener->onTouchBegan = CC_CALLBACK_2(HelloWorld::onTouchBegan, this);
+    listener->onTouchMoved = CC_CALLBACK_2(HelloWorld::onTouchMoved, this);
+    listener->onTouchEnded = CC_CALLBACK_2(HelloWorld::onTouchEnded, this);
+    this->getEventDispatcher()->addEventListenerWithSceneGraphPriority(listener, this);
 
-    /////////////////////////////
-    // 2. add a menu item with "X" image, which is clicked to quit the program
-    //    you may modify it.
-
-    // add a "close" icon to exit the progress. it's an autorelease object
-    auto closeItem = MenuItemImage::create(
-                                           "CloseNormal.png",
-                                           "CloseSelected.png",
-                                           CC_CALLBACK_1(HelloWorld::menuCloseCallback, this));
+    // 物理空間の初期化
+    this->createPhysicsWorld();
     
-	closeItem->setPosition(Vec2(origin.x + visibleSize.width - closeItem->getContentSize().width/2 ,
-                                origin.y + closeItem->getContentSize().height/2));
-
-    // create menu, it's an autorelease object
-    auto menu = Menu::create(closeItem, NULL);
-    menu->setPosition(Vec2::ZERO);
-    this->addChild(menu, 1);
-
-    /////////////////////////////
-    // 3. add your codes below...
-
-    // add a label shows "Hello World"
-    // create and initialize a label
+    // 粒子のシステムを設定
+    this->setUpParticleSystem();
     
-    auto label = Label::createWithTTF("Hello World", "fonts/Marker Felt.ttf", 24);
-    
-    // position the label on the center of the screen
-    label->setPosition(Vec2(origin.x + visibleSize.width/2,
-                            origin.y + visibleSize.height - label->getContentSize().height));
-
-    // add the label as a child to this layer
-    this->addChild(label, 1);
-
-    // add "HelloWorld" splash screen"
-    auto sprite = Sprite::create("HelloWorld.png");
-
-    // position the sprite on the center of the screen
-    sprite->setPosition(Vec2(visibleSize.width/2 + origin.x, visibleSize.height/2 + origin.y));
-
-    // add the sprite as a child to this layer
-    this->addChild(sprite, 0);
+    // 更新処理をスケジュール
+    this->scheduleUpdate();
     
     return true;
 }
 
-
-void HelloWorld::menuCloseCallback(Ref* pSender)
+void HelloWorld::update(float dt)
 {
-    Director::getInstance()->end();
+    // 端末のフレームにかかわらず60fpsでの計算の値で処理をさせる
+    this->world->Step(1/60.f, 1, 1, 1);
+    
+    // 各パーティクルのデータから画像を更新する
+    for (b2ParticleGroup* group : this->particleGroups)
+    {
+        
+        //グループのパーティクルを更新
+        void ** userData { particleSystem->GetUserDataBuffer() + group->GetBufferIndex() };
+        
+        //座標バッファ
+        b2Vec2* vecList { particleSystem->GetPositionBuffer() + group->GetBufferIndex() };
+        
+        //色バッファ
+        b2ParticleColor * colorList { particleSystem->GetColorBuffer() + group->GetBufferIndex() };
+        
+        //バッファループ
+        for(int i = 0; i < group->GetParticleCount();i++,vecList++,userData++)
+        {
+            // 位置を更新
+            if(Sprite* particleImage { static_cast<Sprite*>(*userData) })
+            {
+                particleImage->setColor(Color3B((*colorList).r, (*colorList).g, (*colorList).b));
+                particleImage->setPosition((*vecList).x * PTM_RATIO, (*vecList).y*PTM_RATIO);
+            }
+        }
+    }
 
-#if (CC_TARGET_PLATFORM == CC_PLATFORM_IOS)
-    exit(0);
-#endif
+}
+
+// タッチされたら
+bool HelloWorld::onTouchBegan(Touch *touch, Event *event)
+{
+    
+    const Point& position { touch->getLocation() };
+    this->createParticle(position);
+    return true;
+}
+
+// タッチが動いたら
+void HelloWorld::onTouchMoved(Touch *touch, Event *event)
+{
+    
+}
+
+// タッチが話されたら
+void HelloWorld::onTouchEnded(Touch *touch, Event *event)
+{
+}
+
+void HelloWorld::setUpParticleSystem()
+{
+    // パーティクルシステムの構築
+    b2ParticleSystemDef particleSystemDef;
+    particleSystemDef.density = 0.5;
+    particleSystemDef.radius = 10.0f / PTM_RATIO;
+    particleSystemDef.gravityScale = 3.0f;
+    this->particleSystem = world->CreateParticleSystem(&particleSystemDef);
+}
+
+// 粒子の生成
+void HelloWorld::createParticle(const Point& position)
+{
+    //グループで生成する際はパーティクルグループの形を設定する必要がある
+    b2CircleShape* shape { new b2CircleShape() };
+    shape->m_radius = 50.0f / PTM_RATIO;
+    
+    //パーティクルグループのデータ設定
+    b2ParticleGroupDef groupDef;
+    
+    //パーティクルのグループを設定
+    groupDef.shape = shape;
+    groupDef.flags = b2_waterParticle | b2_particleContactListenerParticle;
+    groupDef.color = b2ParticleColor(137, 224, 253, 255);
+    groupDef.position.Set(position.x/PTM_RATIO,position.y/PTM_RATIO);
+
+    // グループを作成
+    b2ParticleGroup* particleGroup { this->particleSystem->CreateParticleGroup(groupDef) };
+ 
+    // 管理配列に追加
+    this->particleGroups.push_back(particleGroup);
+
+    void ** userData { particleSystem->GetUserDataBuffer() + particleGroup->GetBufferIndex() };
+
+    for(int i = 0; i < particleGroup->GetParticleCount();i++,userData++)
+    {
+        Sprite * water { Sprite::create("particle.png") };
+        water->getTexture()->setAliasTexParameters();
+        water->setScale((this->particleSystem->GetRadius() / (water->getContentSize().width / PTM_RATIO)));
+        (*userData) = water;
+        this->addChild(water);
+    }
+}
+
+
+// 物理空間の初期化
+void HelloWorld::createPhysicsWorld()
+{
+    // 重力ベクトル
+    b2Vec2 gravity {0,-9.8f};
+
+    // ワールドを重力を引数として初期化
+    b2World* world { new b2World(gravity) };
+    this->world = world;
+    
+    world->SetAllowSleeping(true);  // 動いていないオブジェクトは計算しないフラグを立てる(パフォーマンスのため)
+    world->SetContinuousPhysics(true);
+    
+    // 壁を作る
+    const Size& size { this->getContentSize() };
+    
+    b2BodyDef groundBodyDef;
+    groundBodyDef.position.Set(0, 0);   // 画面の左下に基準点を置く
+    b2Body* groundBody = world->CreateBody(&groundBodyDef);
+    b2EdgeShape groundBox;
+    
+    // 天井
+    groundBox.Set(b2Vec2{0,size.height/PTM_RATIO}, b2Vec2{size.width/PTM_RATIO,size.height/PTM_RATIO});
+    groundBody->CreateFixture(&groundBox,0);
+    
+    // 左壁
+    groundBox.Set(b2Vec2{0,size.height/PTM_RATIO}, b2Vec2{0,0});
+    groundBody->CreateFixture(&groundBox,0);
+    
+    // 右壁
+    groundBox.Set(b2Vec2{size.width/PTM_RATIO,size.height/PTM_RATIO}, b2Vec2{size.width/PTM_RATIO,0});
+    groundBody->CreateFixture(&groundBox,0);
+    
+    // 地面
+    groundBox.Set(b2Vec2(0,0), b2Vec2{size.width/PTM_RATIO,0});
+    groundBody->CreateFixture(&groundBox,0);
 }
